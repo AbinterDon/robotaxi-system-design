@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    # AOF persistence — Deep Dive 1: guards against data loss on restart
+    command: redis-server --appendonly yes
+
+volumes:
+  redis_data:
