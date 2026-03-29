@@ -5,80 +5,83 @@ A working implementation of a robotaxi ride-matching system, built with Go follo
 ## Architecture
 
 ```mermaid
-flowchart TD
-    Rider(["Rider App"])
+flowchart LR
+    subgraph rider["Rider"]
+        R["Rider App"]
+    end
 
-    Rider -->|POST /fare| FareH["FareHandler"]
-    Rider -->|POST /rides| RideH["RideHandler"]
-    Rider -->|GET /rides/:id| RideH
+    subgraph core["Core Services"]
+        FUC["FareUseCase\n報價計算"]
+        RUC["RideUseCase\n建立叫車"]
+        Q(["Queue\n消息隊列"])
+        MUC["MatchingUseCase\n配對 + 派車"]
+    end
 
-    FareH --> FareUC["FareUseCase"]
-    RideH --> RideUC["RideUseCase"]
+    subgraph storage["Storage"]
+        DB[("SQLite\nFares / Rides")]
+        GEO["Redis GEO\nAV 位置"]
+        LOCK["Redis\n配對狀態 & 鎖"]
+        DISP["Redis\nDispatch Queue"]
+    end
 
-    FareUC --> FareRepo[("SQLite\nFares")]
-    RideUC --> FareRepo
-    RideUC --> RideRepo[("SQLite\nRides")]
-    RideUC -->|Publish| Queue["RideQueue\nchan string"]
+    subgraph av["AV Fleet"]
+        A["AV Simulator"]
+    end
 
-    Queue -->|Consume| MatchUC["MatchingUseCase\ngoroutine"]
+    R -->|"① 取得報價"| FUC
+    FUC --> DB
 
-    MatchUC -->|GEOSEARCH| LocationStore["Redis GEO\nLocation Store"]
-    MatchUC -->|SET NX EX| LockStore["Redis\nMatching State & Lock"]
-    MatchUC -->|LPUSH/LPOP| Dispatch["Redis\nDispatch Gateway"]
-    MatchUC --> RideRepo
+    R -->|"② 確認叫車"| RUC
+    RUC --> DB
+    RUC -->|"③ 發布請求"| Q
 
-    Dispatch <-->|HTTP poll| AV(["AV Fleet"])
-    LocationStore <-->|POST /av/location| AV
+    Q -->|"④ 消費請求"| MUC
+    MUC -->|"⑤ 查詢附近AV"| GEO
+    MUC -->|"⑥ 搶鎖 + 派車"| LOCK
+    MUC -->|"⑦ 發送指令"| DISP
+    MUC -->|"⑧ 寫入配對結果"| DB
 
-    style Queue fill:#f5a623,color:#000
-    style LocationStore fill:#c0392b,color:#fff
-    style LockStore fill:#c0392b,color:#fff
-    style Dispatch fill:#c0392b,color:#fff
-    style FareRepo fill:#2980b9,color:#fff
-    style RideRepo fill:#2980b9,color:#fff
+    A -->|"定時更新位置"| GEO
+    DISP -->|"輪詢派車指令"| A
+    A -->|"ACCEPT / REJECT"| DISP
+
+    R -->|"⑨ 輪詢結果"| DB
+
+    style Q fill:#f5a623,color:#000
+    style GEO fill:#c0392b,color:#fff
+    style LOCK fill:#c0392b,color:#fff
+    style DISP fill:#c0392b,color:#fff
+    style DB fill:#2980b9,color:#fff
 ```
 
 ### Layer Structure (Clean Architecture)
 
+> 依賴方向：外層依賴內層，內層不知道外層的存在
+
 ```mermaid
-flowchart LR
-    subgraph cmd["cmd/server"]
-        Main["main.go\nDI + graceful shutdown"]
+flowchart TD
+    subgraph outer["外層 — Adapters（可替換）"]
+        H["handler/\nHTTP gin"]
+        Rep["repository/\nGORM + SQLite"]
+        Redis["redisstore/\nRedis"]
+        Que["queue/\nGo channel"]
     end
 
-    subgraph domain["internal/domain  (no external deps)"]
-        E["entities.go\nFare, Ride, AVLocation"]
-        P["ports.go\nRepository & Service interfaces"]
+    subgraph middle["中層 — UseCase（業務邏輯）"]
+        UC["usecase/\nFareUseCase · RideUseCase · MatchingUseCase"]
     end
 
-    subgraph usecase["internal/usecase  (business logic)"]
-        FUC["fare.go\nFareUseCase"]
-        RUC["ride.go\nRideUseCase"]
-        MUC["matching.go\nMatchingUseCase"]
+    subgraph inner["內層 — Domain（核心，零依賴）"]
+        D["domain/\nentities.go  定義資料結構\nports.go     定義介面"]
     end
 
-    subgraph adapters["Adapters"]
-        subgraph handler["internal/handler  (HTTP / gin)"]
-            FH["fare.go"]
-            AVH["av.go"]
-        end
-        subgraph repository["internal/repository  (GORM + SQLite)"]
-            FR["fare_repo.go"]
-            RR["ride_repo.go"]
-        end
-        subgraph redisstore["internal/redisstore  (Redis)"]
-            RS["location.go\nLocationStore\nDispatchGateway\nMatchingStateStore"]
-        end
-        subgraph queue["internal/queue"]
-            Q["queue.go\nRideQueue"]
-        end
-    end
+    outer -->|"呼叫業務邏輯"| middle
+    middle -->|"只依賴介面"| inner
+    outer -.->|"實作介面"| inner
 
-    Main --> domain
-    Main --> usecase
-    Main --> adapters
-    usecase --> domain
-    adapters --> domain
+    style inner fill:#27ae60,color:#fff
+    style middle fill:#2980b9,color:#fff
+    style outer fill:#7f8c8d,color:#fff
 ```
 
 ## System Design Concepts
