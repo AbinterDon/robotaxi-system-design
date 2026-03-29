@@ -11,16 +11,16 @@ flowchart LR
     end
 
     subgraph core["Core Services"]
-        FUC["FareUseCase\n報價計算"]
-        RUC["RideUseCase\n建立叫車"]
-        Q(["Queue\n消息隊列"])
-        MUC["MatchingUseCase\n配對 + 派車"]
+        FUC["FareUseCase\nfare estimation"]
+        RUC["RideUseCase\nride creation"]
+        Q(["Queue\nmessage buffer"])
+        MUC["MatchingUseCase\nmatching + dispatch"]
     end
 
     subgraph storage["Storage"]
         DB[("SQLite\nFares / Rides")]
-        GEO["Redis GEO\nAV 位置"]
-        LOCK["Redis\n配對狀態 & 鎖"]
+        GEO["Redis GEO\nAV locations"]
+        LOCK["Redis\nmatching state & lock"]
         DISP["Redis\nDispatch Queue"]
     end
 
@@ -28,24 +28,24 @@ flowchart LR
         A["AV Simulator"]
     end
 
-    R -->|"① 取得報價"| FUC
+    R -->|"1. get fare estimate"| FUC
     FUC --> DB
 
-    R -->|"② 確認叫車"| RUC
+    R -->|"2. request ride"| RUC
     RUC --> DB
-    RUC -->|"③ 發布請求"| Q
+    RUC -->|"3. publish"| Q
 
-    Q -->|"④ 消費請求"| MUC
-    MUC -->|"⑤ 查詢附近AV"| GEO
-    MUC -->|"⑥ 搶鎖 + 派車"| LOCK
-    MUC -->|"⑦ 發送指令"| DISP
-    MUC -->|"⑧ 寫入配對結果"| DB
+    Q -->|"4. consume"| MUC
+    MUC -->|"5. find nearby AVs"| GEO
+    MUC -->|"6. acquire lock + dispatch"| LOCK
+    MUC -->|"7. send command"| DISP
+    MUC -->|"8. write match result"| DB
 
-    A -->|"定時更新位置"| GEO
-    DISP -->|"輪詢派車指令"| A
+    A -->|"periodic location update"| GEO
+    DISP -->|"poll for command"| A
     A -->|"ACCEPT / REJECT"| DISP
 
-    R -->|"⑨ 輪詢結果"| DB
+    R -->|"9. poll ride status"| DB
 
     style Q fill:#f5a623,color:#000
     style GEO fill:#c0392b,color:#fff
@@ -56,28 +56,28 @@ flowchart LR
 
 ### Layer Structure (Clean Architecture)
 
-> 依賴方向：外層依賴內層，內層不知道外層的存在
+> Dependencies point inward — outer layers know about inner layers, never the reverse.
 
 ```mermaid
 flowchart TD
-    subgraph outer["外層 — Adapters（可替換）"]
+    subgraph outer["Outer — Adapters (swappable)"]
         H["handler/\nHTTP gin"]
         Rep["repository/\nGORM + SQLite"]
         Redis["redisstore/\nRedis"]
         Que["queue/\nGo channel"]
     end
 
-    subgraph middle["中層 — UseCase（業務邏輯）"]
+    subgraph middle["Middle — UseCases (business logic)"]
         UC["usecase/\nFareUseCase · RideUseCase · MatchingUseCase"]
     end
 
-    subgraph inner["內層 — Domain（核心，零依賴）"]
-        D["domain/\nentities.go  定義資料結構\nports.go     定義介面"]
+    subgraph inner["Inner — Domain (zero dependencies)"]
+        D["domain/\nentities.go  data structures\nports.go     interfaces"]
     end
 
-    outer -->|"呼叫業務邏輯"| middle
-    middle -->|"只依賴介面"| inner
-    outer -.->|"實作介面"| inner
+    outer -->|"call use cases"| middle
+    middle -->|"depend on interfaces only"| inner
+    outer -.->|"implement interfaces"| inner
 
     style inner fill:#27ae60,color:#fff
     style middle fill:#2980b9,color:#fff
